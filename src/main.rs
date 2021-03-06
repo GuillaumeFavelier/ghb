@@ -1,43 +1,35 @@
 use std::process::Command;
 use serde_json::Value;
 use clap::{Arg, App};
+use reqwest::header::USER_AGENT;
 
 struct PR {
     repo: String,
     pull: String,
 }
 
-fn get_prs(user: &String) -> Vec<PR> {
-    // https://api.github.com/search/issues?q=author:GuillaumeFavelier+type:pr+is:open
-    let out = match Command::new("gh")
-        .arg("api")
-        .arg("-f")
-        .arg(format!("q=author:{} type:pr is:open", user))
-        .arg("-X")
-        .arg("GET")
-        .arg("search/issues")
-        .output() {
-        Ok(k) => k.stdout,
-        Err(e) => panic!("Command failed: {}", e),
-    };
-    let str_out = match String::from_utf8(out) {
-        Ok(k) => String::from(k.as_str()),
-        Err(e) => panic!("String loading failed: {}", e),
-    };
-    let payload: Value = match serde_json::from_str(str_out.as_str()) {
-        Ok(k) => k,
-        Err(e) => panic!("Parsing failed: {}", e),
-    };
+#[tokio::main]
+async fn search(user: &String, client: &reqwest::Client) -> Result<Value, Box<dyn std::error::Error>> {
+    let url = format!("https://api.github.com/search/issues?q=author:{}+type:pr+is:open", user);
+    let payload = client.get(url.as_str())
+        .header(USER_AGENT, "My Rust Program 1.0")
+        .send()
+        .await?
+        .json::<Value>()
+        .await?;
+    Ok(payload)
+}
+
+fn parse(search: &Value) -> Vec<PR> {
+    let items = search["items"].as_array().unwrap();
     let mut vec = Vec::new();
-    if let Some(items) = &payload["items"].as_array() {
-        for item in items.iter() {
-            let repository_url = item["repository_url"].as_str().unwrap();
-            let number = item["number"].as_u64().unwrap();
-            vec.push(PR{
-                repo: String::from(repository_url),
-                pull: format!("{}/pulls/{}", repository_url, number)
-            })
-        }
+    for item in items {
+        let repository_url = item["repository_url"].as_str().unwrap();
+        let number = item["number"].as_u64().unwrap();
+        vec.push(PR{
+            repo: String::from(repository_url),
+            pull: format!("{}/pulls/{}", repository_url, number)
+        })
     }
     vec
 }
@@ -99,7 +91,12 @@ fn main() {
         Some(k) => String::from(k),
         None => panic!("User login not provided"),
     };
-    let prs = get_prs(&user);
+    let client = reqwest::Client::new();
+    let res = match search(&user, &client) {
+        Ok(s) => s,
+        Err(e) => panic!("Fail to search: {}", e),
+    };
+    let prs = parse(&res);
     for pr in prs {
         if let Some(sha) = get_pr_sha(&pr){
             if let Some(status) = get_pr_status(&pr, &sha){
