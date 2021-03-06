@@ -1,31 +1,10 @@
 use std::process::Command;
 use serde_json::Value;
+use clap::{Arg, App};
 
 struct PR {
     repo: String,
     pull: String,
-}
-
-fn get_user() -> Option<String> {
-    let out = match Command::new("gh")
-        .arg("api")
-        .arg("user")
-        .output() {
-        Ok(k) => k.stdout,
-        Err(e) => panic!("Command failed: {}", e),
-    };
-    let str_out = match String::from_utf8(out) {
-        Ok(k) => String::from(k.as_str()),
-        Err(e) => panic!("String loading failed: {}", e),
-    };
-    let payload: Value = match serde_json::from_str(str_out.as_str()) {
-        Ok(k) => k,
-        Err(e) => panic!("Parsing failed: {}", e),
-    };
-    match payload.get("login") {
-        Some(login) => Some(String::from(login.as_str().unwrap())),
-        None => None,
-    }
 }
 
 fn get_prs(user: &String) -> Vec<PR> {
@@ -108,9 +87,17 @@ fn get_pr_status(pr: &PR, sha: &String) -> Option<String> {
 }
 
 fn main() {
-    let user = match get_user() {
-        Some(k) => k,
-        None => panic!("User not found"),
+    let matches = App::new("GitHub Board")
+            .arg(Arg::new("user")
+                .short('u')
+                .long("user")
+                .value_name("USER")
+                .about("Specify GitHub user login")
+                .required(true))
+        .get_matches();
+    let user = match matches.value_of("user") {
+        Some(k) => String::from(k),
+        None => panic!("User login not provided"),
     };
     let prs = get_prs(&user);
     for pr in prs {
