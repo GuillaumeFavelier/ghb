@@ -1,18 +1,12 @@
-use std::process::Command;
 use serde_json::Value;
 use clap::{Arg, App};
 use reqwest::header::USER_AGENT;
-
-struct PR {
-    repo: String,
-    pull: String,
-}
 
 #[tokio::main]
 async fn search(user: &String, client: &reqwest::Client) -> Result<Value, Box<dyn std::error::Error>> {
     let url = format!("https://api.github.com/search/issues?q=author:{}+type:pr+is:open", user);
     let payload = client.get(url.as_str())
-        .header(USER_AGENT, "My Rust Program 1.0")
+        .header(USER_AGENT, "GitHub Board")
         .send()
         .await?
         .json::<Value>()
@@ -20,62 +14,33 @@ async fn search(user: &String, client: &reqwest::Client) -> Result<Value, Box<dy
     Ok(payload)
 }
 
-fn parse(search: &Value) -> Vec<PR> {
-    let items = search["items"].as_array().unwrap();
-    let mut vec = Vec::new();
-    for item in items {
-        let repository_url = item["repository_url"].as_str().unwrap();
-        let number = item["number"].as_u64().unwrap();
-        vec.push(PR{
-            repo: String::from(repository_url),
-            pull: format!("{}/pulls/{}", repository_url, number)
-        })
-    }
-    vec
+#[tokio::main]
+async fn get_pr_sha(pr: &Value, client: &reqwest::Client) -> Result<Value, Box<dyn std::error::Error>> {
+    let repository_url = pr["repository_url"].as_str().unwrap();
+    let number = pr["number"].as_u64().unwrap();
+    let url = format!("{}/pulls/{}", repository_url, number);
+    let payload = client.get(url.as_str())
+        .header(USER_AGENT, "My Rust Program 1.0")
+        .send()
+        .await?
+        .json::<Value>()
+        .await?;
+    println!("{}", payload);
+    Ok(payload)
 }
 
-fn get_pr_sha(pr: &PR) -> Option<String> {
-    let out = match Command::new("gh")
-        .arg("api")
-        .arg(&pr.pull)
-        .output() {
-        Ok(k) => k.stdout,
-        Err(e) => panic!("Command failed: {}", e),
-    };
-    let str_out = match String::from_utf8(out) {
-        Ok(k) => String::from(k.as_str()),
-        Err(e) => panic!("String loading failed: {}", e),
-    };
-    let payload: Value = match serde_json::from_str(str_out.as_str()) {
-        Ok(k) => k,
-        Err(e) => panic!("Parsing failed: {}", e),
-    };
-    match payload["head"].get("sha") {
-        Some(sha) => Some(String::from(sha.as_str().unwrap())),
-        None => None,
-    }
-}
-
-fn get_pr_status(pr: &PR, sha: &String) -> Option<String> {
-    let out = match Command::new("gh")
-        .arg("api")
-        .arg(format!("{}/commits/{}/status", pr.repo, sha))
-        .output() {
-        Ok(k) => k.stdout,
-        Err(e) => panic!("Command failed: {}", e),
-    };
-    let str_out = match String::from_utf8(out) {
-        Ok(k) => String::from(k.as_str()),
-        Err(e) => panic!("String loading failed: {}", e),
-    };
-    let payload: Value = match serde_json::from_str(str_out.as_str()) {
-        Ok(k) => k,
-        Err(e) => panic!("Parsing failed: {}", e),
-    };
-    match payload.get("state") {
-        Some(state) => Some(String::from(state.as_str().unwrap())),
-        None => None,
-    }
+#[tokio::main]
+async fn get_pr_status(pr: &Value, sha: &Value, client: &reqwest::Client) -> Result<Value, Box<dyn std::error::Error>> {
+    let repository_url = pr["repository_url"].as_str().unwrap();
+    let commit = sha["head"]["sha"].as_str().unwrap();
+    let url = format!("{}/commits/{}/status", repository_url, commit);
+    let payload = client.get(url.as_str())
+        .header(USER_AGENT, "My Rust Program 1.0")
+        .send()
+        .await?
+        .json::<Value>()
+        .await?;
+    Ok(payload)
 }
 
 fn main() {
@@ -96,12 +61,15 @@ fn main() {
         Ok(s) => s,
         Err(e) => panic!("Fail to search: {}", e),
     };
-    let prs = parse(&res);
+    let prs = res["items"].as_array().unwrap();
     for pr in prs {
-        if let Some(sha) = get_pr_sha(&pr){
-            if let Some(status) = get_pr_status(&pr, &sha){
-                println!("{} {} {}", pr.repo, sha, status);
-            }
-        }
+        let sha = match get_pr_sha(&pr, &client){
+            Ok(s) => s,
+            Err(e) => panic!("Fail to fetch sha: {}", e),
+        };
+        match get_pr_status(&pr, &sha, &client){
+            Ok(s) => println!("{} {}", pr["repository_url"], s["state"]),
+            Err(e) => panic!("Fail to fetch sha: {}", e),
+        };
     }
 }
